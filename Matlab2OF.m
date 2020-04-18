@@ -1,7 +1,7 @@
 
 %% Script to take data from MATLAB and convert to OpenFOAM
 %% Xinyu Zhao 2017, Joseph Squeo 2019
-function Matlab2OF(x_est,j,varname,tFolder,scriptsFolder,x0)
+function Matlab2OF(x_est,j,varname,tFolder,x0)
 %% Write data in OF format
 NDATA = size(x_est,1);
 Tdata = x_est(:,j);
@@ -107,5 +107,5 @@ Tdata = x_est(:,j);
     fprintf(fid,'// ************************************************************************* //\n');
     
     fclose(fid);  
-    cd(scriptsFolder);
+
 end

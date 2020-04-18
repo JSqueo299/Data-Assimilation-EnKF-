@@ -18,6 +18,7 @@
 clear
 close all
 clc
+
 %---------Material Properties (aluminum)---------%
 kTherm = 80;             %[W / m*K] thermal conductivity
 Cp = 460;                %[J / kg*K] specific heat @ constant pressure
@@ -30,7 +31,7 @@ L = 1;              % length of bar
 dx = L/N;           % cell spacing
 dx2 = dx*dx;
 %---------Time---------%
-tEnd = 10;
+tEnd = 5;
 stabilityCriteria = 0.5*dx2/alpha;   %CFD stability criteria for purely transient diffusion problems
 %dt = stabilityCriteria / 5;     
 dt = 0.25;
@@ -54,13 +55,14 @@ t = 0:dt:tEnd;
 % end
 % 
 % % PLOT OF TEMPERATURE DISTRIBUTION VS TIME
-% figure();
+% figure(1);
 % imagesc(T');
 % xlabel('Cell Number')
 % ylabel('Time (s)')
 % c = colorbar;
 % c.Label.String = 'Temperature (K)';
-% str3 = sprintf('1D Transient Heat Conduction in a Rod: q_{source}= 5e+07 * sin(t) W/m^3');
+% % str3 = sprintf('1D Heat Conduction in an Aluminum Rod: q_{source}= 5e+07 * sin(t) W/m^3');
+% str3 = sprintf('1D Heat Conduction in an Aluminum Rod');
 % title(str3);
 
 %% =================  FINITE DIFFERENCE METHOD  ======================= %%
@@ -109,9 +111,9 @@ clc
 
 
 x0 = 300;           % initalize ensemble
-sigma = 5;          % sample error std deviation to initialize the ensemble
-w = 50;            % std dev of model noise
-v = 5;              % std dev of measurement noise
+sigma = 0;          % sample error std deviation to initialize the ensemble
+w = 0.005;            % std dev of model noise
+v = 0.05;              % std dev of measurement noise
 q = 30;              % # ensemble members (simulation runs per time step)
 %C = eye(N);         % directly maps current state to the forecasted measurements
 C = zeros(N);      %%%%%%%%%%%%%%%%%%%%%%%% NEW C MAPPING
@@ -126,11 +128,16 @@ y_meas = zeros(N,tEnd/(dt*solverRuns));
 
 for cell = 0.1:0.05:0.9
     C(round(N*cell),round(N*cell)) = 1;  %%%%%%%%%%%%%%%%%%%%%%%% NEW C MAPPING
-    y_meas(round(N*cell),1:end) = T_FD(solverRuns:solverRuns:end,round(N*cell)); % each column of y_meas is new time, t
+%     y_meas(round(N*cell),1:end) = T_FD(solverRuns:solverRuns:end,round(N*cell));
+      y_meas(round(N*cell),1:end) = T_FD(solverRuns:solverRuns:end,round(N*cell)) + 30.*ones(length(t)-1,1);
+%     y_meas(round(N*cell),1:end) = T_FD(solverRuns:solverRuns:end,round(N*cell)) + randi([-30 30],length(t)-1,1); 
     k = k+1;
 end
+% y_meas(10:5:90,:)= y_meas(10:5:90,:) + [10 17 27 33 5 -10 -15 -22 -6 11 15 23 31 13 15 7 1]'.* ones(17,tEnd/dt);
 
-tPlot = 10;                         % plot at k=10
+H = C;
+
+tPlot = tEnd;                         % plot at k=10
     if tPlot > tEnd
         error('tPlot (plot time) cannot exceed tEnd (end time)!')
     end
@@ -138,14 +145,17 @@ tPlot = 10;                         % plot at k=10
 % Specify paths to openFOAM case directory and Matlab scripts
 solverName = 'myLaplacianFoam';
 caseFolder_OF = '~/OpenFOAM/jns14008-5.x/1D_heatConductionEnKF';
-scriptsFolder = '~/dataAssimilation';
-cd(scriptsFolder);
+addpath('~/dataAssimilation')  ;
+% scriptsFolder = '~/dataAssimilation';
+% cd(scriptsFolder);
 
 tic
-% [x_EnKF, x_tr] = OF_ensemblekfilter(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,scriptsFolder,solverRuns);
-[x_EnKF, x_tr] = OF_ensemblekfilter2(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,scriptsFolder,solverRuns);  %%%%%%%%%%%%%%%%%%%%%%%% NEW C MAPPING
+% [x_EnKF, x_tr] = OF_ensemblekfilter2(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,solverRuns,T_FD);
+[x_EnKF, x_tr] = EnKF_Stanford(x0,N,C,H,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,solverRuns,T_FD);  %%%%%%%%%%%%%%%%%%%%%%%% NEW C MAPPING
 toc
 x_EnKF1 = x_EnKF;
+
+
 %%
 % solverRuns = 1;
 % q = 5;              % # ensemble members (simulation runs per time step)
@@ -170,7 +180,7 @@ x_EnKF1 = x_EnKF;
 % [x_EnKF, x_tr] = OF_ensemblekfilter(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,scriptsFolder,solverRuns); 
 % toc
 % x_EnKF2 = x_EnKF;
-% %%
+%%
 % solverRuns = 50;
 % q = 5;              % # ensemble members (simulation runs per time step)
 % y_meas = nan * ones(N,tEnd/(dt*solverRuns));   % measurements --> each row = new state, each column = time (Use nan if no measurement available. Num_iterations + 2 because k=1 treated as t=0 & measurement for future state)
@@ -194,7 +204,7 @@ x_EnKF1 = x_EnKF;
 % [x_EnKF, x_tr] = OF_ensemblekfilter(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,scriptsFolder,solverRuns); 
 % toc
 % x_EnKF3 = x_EnKF;
-% %%
+%%
 % solverRuns = 100;
 % q = 5;              % # ensemble members (simulation runs per time step)
 % y_meas = nan * ones(N,tEnd/(dt*solverRuns));   % measurements --> each row = new state, each column = time (Use nan if no measurement available. Num_iterations + 2 because k=1 treated as t=0 & measurement for future state)

@@ -4,30 +4,12 @@
 %   September 2019
 %   ===================================================================   %
 %	
-%   The ensemblekfilter function is an ensemble kalman filter used to
-%	predict a future state in time of a system. I have written a document
-%	that corresponds to the numbered steps in this file. The equations are
-%	explained and the purpose of each step to provide a better
-%	understanding of the code and how it works. 
-%
-%   There are two states: truth state (x_tr) and estimate state (x_est).
-%   The ensemble kalman filter initially generates an ensemble of states by
-%   adding random sample error to the initial state. The initial state and
-%   standard deviation of the random sample error are function inputs.
-%	x_(k+1) = f(x,u) + w, where u some input, w the Gaussian distributed
-%	process noise, and f is a nonlinear function. The measurement is
-%	y_(k+1) = h(x) + v where h is a nonlinear function and v Gaussian
-%	distributed measurement noise.
-%   
-%   The algorithm used in this code is referenced from the following: S
-%   Gillijns et. al., "What Is the Ensemble Kalman Filter and How Well Does
-%   it Work?" Proceedings of the 2006 American Control Conference,
-%   Minneapolis, Minnesota, USA, June 14-16, 2006, pp 4448-4453.
+%   Testing Stanford EnKF formulation for 1D heat conduction case
 %
 %   ===================================================================   %
 
 
-function [x_EnKF, x_tr] = OF_ensemblekfilter(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,solverRuns) 
+function [x_EnKF, x_tr] = EnKF_Stanford(x0,N,C,H,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,solverRuns,T_FD) 
 % OUTPUTS
 %   x_EnKF: Predicted state forward in time (k+1) (with noise)
 %
@@ -93,10 +75,10 @@ for k = 2:num_iterations + 1             % time loop (k=1 --> t=0, k=2 --> t=1*d
     
    %  =============== 2.ITERATE THROUGH ENSEMBLE MEMBERS ==============   %
    for j = 1:q                              % loop through ensemble members one at a time
-     W(:,j) = w .* randn(N,1);         % random Gaussian distributed noise with standard deviation input "w" (array size nx1)
+     W(:,j) = w .* x_est(:,j) .* randn(N,1);         % random Gaussian distributed noise with standard deviation input "w" (array size nx1)
      V(:,j) = v .* randn(C_rows,1);         % random Gaussian distributed noise with standard deviation input "z" (array size nx1)
-     samp_err(:,j) = sigma .* randn(N,1);     % sample error used to generate initial ensemble below
-     
+     V(:,j) = v .* randn(C_rows,1) .* y_meas(:,k-1);
+     samp_err(:,j) = sigma .* y_meas(:,k-1) .* randn(N,1);
      
      % ======== INITIALIZE THE ENSEMBLE WITH RANDOM SAMPLE ERROR ======== %
      if k == 2          % sample error only added during first time iteraiton
@@ -112,41 +94,32 @@ for k = 2:num_iterations + 1             % time loop (k=1 --> t=0, k=2 --> t=1*d
    W(end,:) = 0;
    V(1,:) = 0;
    V(end,:) = 0;
-     
-   % Replace "NaN" in y_meas matrix with the forecasted measurement, y_for
-   % (when no measurement is available)
-   if sum( isnan(y_meas(:,k-1)) ) >= 1              % if y_meas has one or more values that are NaN, then
-   [row,col] = find(isnan(y_meas(:,k-1)));          % find row,col index of NaN elements
-     for index = 1:length(row)
-        y(row(index),:) = y_for(row(index),:);   % replace values of NaN from y_meas with y_for forecasted values so that these measurements are not assimilated with the K matrix
-     end
-   end
    
    
    %  =============== 3.AVERAGE ALL ENSEMBLE MEMBERS ==================   %
    x_estbar = mean(x_est,2);                % mean of ensemble of forecasted state (nx1)  
-   y_forbar = mean(y_for,2);                % mean of ensemble of forecasted measurement (nx1)  
+   y_bar = mean(y,2);                % mean of ensemble of forecasted measurement (nx1)  
+   Vmean = mean(V,2);
    
+   %  ================= 4.ERROR COVARIANCE MATRICES ===================   %
+   P = zeros(N);
+   R = zeros(C_rows);
    
-   %  ================= 4.ENSEMBLE ERROR MATRICES =====================   %
-   for j = 1:N
-     Ex(j,:) = [x_est(j,:) - x_estbar(j)];  % ensemble error matrix --> (n x q) matrix
+   for j = 1:q
+     Ex(:,j) = [x_est(:,j) - x_estbar(j)];  % ensemble error matrix --> (n x q) matrix
+     P = P + Ex(:,j)*Ex(:,j)';
+     
+     Ey(:,j) = [y(:,j) - y_bar(j)];  % ensemble of output error matrix --> (p x q) matrix
+%      Ey(:,j) = [V(:,j) - Vmean(j)];  % ensemble of output error matrix --> (p x q) matrix
+     R = R + Ey(:,j)*Ey(:,j)';
    end 
+   P = P./(q-1);
+   R = R/(q-1);
    
-   for j = 1:C_rows
-     Ey(j,:) = [y_for(j,:) - y_forbar(j)];  % ensemble of output error matrix --> (p x q) matrix
-   end
-   
-   %  ================= 5.ESTIMATE COVARIANCE MATRICES ================   %
-   Pxy = Ex*Ey'/(q-1);                      % covariance matrix (nxq * qxp = nxp, q is # ensembles, p is # measurements, n is # of states)
-   Pyy = Ey*Ey'/(q-1);                      % covariance matrix (pxq * qxp = pxp, q is # ensembles, p is # measurements, n is # of states)
    
    %  ==================== 6.KALMAN GAIN MATRIX =======================   %
-   % (Pyy)^-1 is found using a pseudo-SVD decomposition to prevent
-   % singularity numerical error
-%    PyyInv = pinv(Pyy);
-%    K = Pxy * PyyInv;
-    K = eye(N);
+%    K = P*H'/(H*P*H' + R);
+   K = P*H'*pinv(H*P*H' + R);
    
    %  ======================= 7.ANALYSIS STEP =========================   %
    x_est = x_est + K * (y - y_for);         % new state estimate (nxp * pxq = nxq)
@@ -177,5 +150,5 @@ for k = 2:num_iterations + 1             % time loop (k=1 --> t=0, k=2 --> t=1*d
 end
 
 % ======================== POST-PROCESSING ============================   %
-ensemblekfilter_plots(tPlot,q,w,v,y_meas,x_EnKF,x_tr,dt,solverRuns)
+ensemblekfilter_plots(tPlot,q,w,v,y_meas,x_EnKF,x_tr,dt,solverRuns,T_FD)
 end

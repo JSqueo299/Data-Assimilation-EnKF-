@@ -73,11 +73,12 @@ T(end,:) = [];
 % PLOT OF TEMPERATURE DISTRIBUTION VS TIME
 figure();
 imagesc(cellEdges,t,T);
-xlabel('Cell Edge ID')
+xlabel('Cell ID')
 ylabel('Time (s)')
 c = colorbar;
 c.Label.String = 'Temperature (K)';
-str = sprintf('1D Transient Heat Conduction in a Rod: q_{source}= %.0e*sin(t) W/m^3',q);
+% str = sprintf('1D Transient Heat Conduction in a Rod: q_{s}=|%.0e*sin(t)| W/m^3',q);
+str = sprintf('1D Transient Heat Conduction in an Aluminum Rod');
 title(str);
 %% =======================  OPENFOAM  ========================= %%
 % fontsize = 17;

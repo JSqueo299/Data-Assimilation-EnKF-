@@ -27,7 +27,7 @@
 %   ===================================================================   %
 
 
-function [x_EnKF, x_tr] = OF_ensemblekfilter2(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,scriptsFolder,solverRuns) 
+function [x_EnKF, x_tr] = OF_ensemblekfilter2(x0,N,C,w,v,q,y_meas,sigma,tPlot,caseFolder_OF,solverName,tEnd,dt,solverRuns,T_FD) 
 % OUTPUTS
 %   x_EnKF: Predicted state forward in time (k+1) (with noise)
 %
@@ -72,9 +72,6 @@ function [x_EnKF, x_tr] = OF_ensemblekfilter2(x0,N,C,w,v,q,y_meas,sigma,tPlot,ca
 %   tEnd:   end time
 %
 %   dt:     time step 
-%
-%   scriptsFolder: directory path to the MATLAB scripts
-%                   i.e.) scriptsFolder = '~/dataAssimilation'
 %
 %   solverRuns: number of times OF solver should run per EnKF time
 %               advancement
@@ -133,39 +130,39 @@ for k = 2:num_iterations + 1             % time loop (k=1 --> t=0, k=2 --> t=1*d
    y_forbar = mean(y_for,2);                % mean of ensemble of forecasted measurement (nx1)  
    
    
-   %  ================= 4.ENSEMBLE ERROR MATRICES =====================   %
-   for j = 1:N
-     Ex(j,:) = [x_est(j,:) - x_estbar(j)];  % ensemble error matrix --> (n x q) matrix
+   %  ================= 4.ERROR COVARIANCE MATRICES ===================   %
+   Pxy = zeros(N);
+   for j = 1:q
+     Ex(:,j) = [x_est(:,j) - x_estbar(j)]; 
+     Ey(:,j) = [y_for(:,j) - y_forbar(j)];
+     Pxy = Pxy + Ex(:,j)*Ey(:,j)';
    end 
+   Pxy = Pxy./(q-1);
    
-   for j = 1:C_rows
-     Ey(j,:) = [y_for(j,:) - y_forbar(j)];  % ensemble of output error matrix --> (p x q) matrix
-   end
+   Pyy = zeros(C_rows);
+   for j = 1:q
+     Ey(:,j) = [y_for(:,j) - y_forbar(j)];  
+     Pyy = Pyy + Ey(:,j)*Ey(:,j)';
+   end 
+   Pyy = Pyy./(q-1);
    
-   %  ================= 5.ESTIMATE COVARIANCE MATRICES ================   %
-   Pxy = Ex*Ey'/(q-1);                      % covariance matrix (nxq * qxp = nxp, q is # ensembles, p is # measurements, n is # of states)
-   Pyy = Ey*Ey'/(q-1);                      % covariance matrix (pxq * qxp = pxp, q is # ensembles, p is # measurements, n is # of states)
    
    %  ==================== 6.KALMAN GAIN MATRIX =======================   %
-   % (Pyy)^-1 is found using a pseudo-SVD decomposition to prevent
-   % singularity numerical error
-   PyyInv = pinv(Pyy);
-   K = Pxy * PyyInv;
-%     K = Pxy/Pyy;
-%     K = eye(N);
+%    K = Pxy/Pyy;
+   K = Pxy*pinv(Pyy);
+   
    
    %  ======================= 7.ANALYSIS STEP =========================   %
    x_est = x_est + K * (y - y_for);         % new state estimate (nxp * pxq = nxq)
    
    % Send analsis step output to OpenFOAM and run the solver for one dt
-   cd(scriptsFolder);   % change directory to folder with Matlab scripts
    tFolder = write_controlDict(k,caseFolder_OF,solverName,dt,tEnd,solverRuns); % write new controlDict file to start at the current time t
    varname = 'T';
    T = zeros(N,q);    % rows are each second of time, columns are cell centers
    
    for j = 1:q   % iterate through for each ensemble member
        changeFolderOF(varname,tFolder,caseFolder_OF);      % change directories to current OF time folder to create 'T' file from analysis step
-       Matlab2OF(x_est,j,varname,tFolder,scriptsFolder,x0);   % generate the T file for OpenFOAM from analysis step
+       Matlab2OF(x_est,j,varname,tFolder,x0);   % generate the T file for OpenFOAM from analysis step
        Tsolver = Matlab_callOF_myLaplacianFoam(k,varname,caseFolder_OF,solverName,dt,solverRuns);  % change to t+dt time folder, run the solver for one time step
        T(:,j) = Tsolver;    % store values from OF solver output to a matrix (each row is a new cell, each column a new ensemble)
 
@@ -184,5 +181,5 @@ for k = 2:num_iterations + 1             % time loop (k=1 --> t=0, k=2 --> t=1*d
 end
 
 % ======================== POST-PROCESSING ============================   %
-ensemblekfilter_plots(tPlot,q,w,v,y_meas,x_EnKF,x_tr,dt,solverRuns)
+ensemblekfilter_plots(tPlot,q,w,v,y_meas,x_EnKF,x_tr,dt,solverRuns,T_FD)
 end
