@@ -1,0 +1,230 @@
+%% ==================================================================== %%
+% Creator: Joseph EnKF.N. Squeo
+% Contact: joseph.squeo@uconn.edu
+% Version History: v1 - 6/1/2020
+% Affiliation: Univeristy of Connecticut
+
+% To Use:
+%   _Main_StanfordEnKF.m_ is the main script used to initlize the
+%   parameters and call the appropriate functions.
+
+% Description:
+%   This script is an ensemble kalman filter used to
+%	predict a future state in time of a system. The code couples OpenFOAM 
+%   with MATLAB where the state is evolved in
+%
+%   The ensemble kalman filter initially generates an ensemble of states by
+%   adding random sample error to the initial state. The initial state and
+%   standard deviation of the random sample error are function inputs.
+%	x_(k+1) = f(x,u) + w, where u some input, w the Gaussian distributed
+%	process noise, and f is a nonlinear function. The measurement is
+%	y_(k+1) = h(x) + v where h is a nonlinear function and v Gaussian
+%	distributed measurement noise.
+  
+% Resources:
+%   1. S. Gillijns et. al., "What Is the Ensemble Kalman Filter and How Well Does
+%      it Work?" Proceedings of the 2006 American Control Conference,
+%      Minneapolis, Minnesota, USA, June 14-16, 2006, pp 4448-4453.
+%   2. Geir Evensen.Data Assimilation:  The Ensemble Kalman Filter.  
+%      Springer, 2nd edition, 2009.
+%   3. J. F. Labahn, H. Wu, B. Coriton, J. H. Frank, and M. Ihme, Data 
+%     Assimilation Using High-Speed Measurements and LES to Examine Local 
+%     Extinction Events in Turbulent Flames,Proceedings of the Combustion 
+%     Institute (2017).
+
+% OUTPUT VARIABLES:
+%  1. filterData: estimate from the ensemble Kalman filter stored as a
+%     cell matrix, where each cell is a new state variable and each column
+%     vector within the each cell is the estimate for each time step
+%
+%  2. EnKF: structure with updated EnKF variables
+%
+%  3. t: structure with updated time variables
+%
+%
+% INPUT VARIABLES:
+%  1. EnKF: structure containing variables pertaining to the EnKF
+%          - EnKF.N: Number of cells
+%          - EnKF.varName: Variable names as they appear in OpenFOAM
+%          - EnKF.solverRuns: Number of times to run the OpenFOAM solver before
+%                             assimilating measurements
+%          - EnKF.q: Ensemble size
+%          - EnKF.H: Jacobian of measurement operator matrix
+%          - EnKF.C: Measurement operator/mapping matrix to map state to
+%                    measurements
+%          - EnKF.caseFolder_OF: Path to OpenFOAM case directory
+%          - EnKF.solverName: Name of the sovler to be called
+%          - EnKF.numVars: Number of state variables
+%          - EnKF.numMeas: Number of measurements for state variables
+%          - EnKF.obsCells: cell locations of observations
+%
+%
+%  2. stdDev: structure that stores stdDevs/uncertainty for the initial
+%            sample, model and measurements
+%          - stdDev.sample: Percent stdDev for the initla sample of ensembles
+%          - stdDev.w: Percent stdDev/uncertainty for updating the state 
+%          - stdDev.v: Percent stdDev/uncertainty for updating measurements
+%
+%
+%  3. t: structure that stores all time variables
+%          - t.start: Start time of the OpenFOAM simulaiton
+%          - t.end: End time of the OpenFOAM simulaiton
+%          - t.dt: Time step of the OpenFOAM simulaiton
+%          - t.range: Time range 
+%          - t.plot: Time to be plotted following the EnKF updates
+%          - t.folder: Current time folder for accessing OpenFOAM files
+%          - t.folderNew: New time folder one time step ahead for file
+%                         access
+%
+%
+%  4. y: structure that stores all measurements
+%          - y.T: temperature measurements
+%   ===================================================================   %
+
+                                                    
+function [ filterData,EnKF,t ] = EnKF_Stanford_1DheatConduction_v2( EnKF,stdDev,t,y )
+
+
+[EnKF,y,Cx] = preProcessing(EnKF,y,t);
+ResetStartTime( EnKF,t.start );                                            % Resets system/controlDict file in OpenFOAM for new run with new start time
+ini{1} = 300 .* ones(EnKF.N,1);                                            % initialize ensemble based on startTime solver output                           
+filterData = ini;
+
+x{1} = addNoise( stdDev.sample(1),ini{1},EnKF.N,EnKF.q );                        % creates an ensemble, adds noise and filters out negative values
+x{1}(1,:) = 300;  x{1}(end,:) = 300;                                       % Enforce B.C. of fixed T=300 K
+
+% * NOTES * 
+% At this point, the state/ensemble is initialized with sample error.
+t.now = t.start;
+
+    % TIME LOOP 
+    for k = 2:EnKF.numIter + 1                                                 % time loop (k=1 --> t=t.start, k=2 --> t=t.start + 1*t.dt, k=3 --> t=t.start + 2*t.dt)
+      
+%             t.folder = santoro_write_controlDict( k,EnKF,t );                     % write new controlDict file to start at the current time 
+            % fprintf('time = %.15g\n',t.folder);                                   % print the current time being assimilated for reference how far along the run is
+       for f = 1:EnKF.solverRuns
+           santoro_write_controlDict( EnKF,t ); 
+            
+           for j = 1:EnKF.q                                                            % iterate through for each ensemble member
+               changeFolderOF( EnKF,t );                                           % change directories to current OF time folder 
+
+               Matlab2OF( EnKF,x,t.now,j,300 );                                     % function automatically loops through all varialbes in EnKF.varEnKF. Send state variable to OpenFOAM case directory
+
+%                t.folderNew = t.start + ( EnKF.solverRuns .* t.dt .* (k-1) );           % next time folder for next time step, accounting for solverRuns (skips time steps)
+
+               cd(EnKF.caseFolder_OF);                                                    % changes to new time folder, decomposes the mesh, calls the OpenFOAM solver in parallel then reconstructs the fields in EnKF.varName
+               callSolver = sprintf('%s',EnKF.solverName);
+               [~,~] = unix(callSolver); 
+               
+               x = OpenFoam2Matlab( EnKF,t,j,x );                                  % reads ALL OpenFOAM state variables in new time folder back into Matlab as column vectors for each ensemble
+           end
+            
+            t.now = t.now + t.dt;
+       end
+        
+
+        % CALCULATE ENSEMBLE MEAN AND RESIDUAL
+        for i = 1:EnKF.numVars  
+%             noise = normrnd(0,stdDev.w(i),[50 EnKF.q]);
+%             x{i}(1:50,:) = x{i}(1:50,:) + noise;
+%             x{i}(50:99,:) = x{i}(50:99,:) + noise(end:-1:1,:);
+%             x{i} = addNoise( stdDev.w(i),x{i},EnKF.N,EnKF.q );          % add noise to state ensembles
+x{i} = addNoise( 0,x{i},EnKF.N,EnKF.q );
+% =========================================================         
+% Localization ORIGINAL (sol'n blows up because cells continuously summed
+% seed = rng;
+% noise = normrnd(0,stdDev.v(i),[4 EnKF.q]);
+% y_pert = y{1}(1:4) + noise;
+% y_pert(5:8,:) = y{1}(5:end) + noise(end:-1:1,:);
+%     phi = zeros(EnKF.N,EnKF.q);
+%     y_pert = addNoise( stdDev.v(i),y{i}(obsID),numel(obsID),EnKF.q);
+y_pert = y{1};
+            for n = 1:EnKF.N
+                
+                Lfactor = heaviside( round(EnKF.Lradius.*ones(1,EnKF.numObs) - abs(Cx(EnKF.obsCells{i})' - Cx(n).*ones(1,EnKF.numObs)),5) );
+                [~,obsID] = find( Lfactor );
+                Lmatrix = Lfactor .* EnKF.R{i};   clear Lfactor;
+                Lmatrix( all(~Lmatrix,2), : ) = [];                                   % Remove zero rows
+                Lmatrix( :, all(~Lmatrix,1) ) = [];                                   % Remove zero columns
+                [~,cellID] = find( EnKF.C{i}(obsID,:) );
+% cellID=n;
+% rng(seed);
+%                 y_pert = addNoise( stdDev.v(i),y{i}(obsID),numel(obsID),EnKF.q);
+
+                P = cov( x{i}(cellID,:)' );
+
+                innov = y_pert(obsID,:) - EnKF.C{i}(obsID,cellID) * x{i}(cellID,:);
+
+                Ki = P*EnKF.H{i}(obsID,cellID)' / (EnKF.H{i}(obsID,cellID)*P*EnKF.H{i}(obsID,cellID)' + Lmatrix);
+                phi(cellID,:) = Ki * innov;
+%                 x{i}(cellID,:) = x{i}(cellID,:) + Ki * innov;
+% PP{n}=P; Kii{n}=Ki; innovvv{n}=innov; PHI{n}=phi(:,1);
+            end   
+            x{i} = x{i} + phi;
+% =========================================================            
+
+
+
+% =========================================================         
+% Localization #1 (Barycentring weighting of the innovation)
+%             for n = 1:EnKF.N
+%                 
+%                 Lfactor = heaviside( round(EnKF.Lradius.*ones(1,EnKF.numObs) - abs(Cx(EnKF.obsCells{i})' - Cx(n).*ones(1,EnKF.numObs)),5) );
+%                 [~,obsID] = find( Lfactor );
+%                 Lmatrix = Lfactor .* EnKF.R{i};   clear Lfactor;
+%                 Lmatrix( all(~Lmatrix,2), : ) = [];                                   % Remove zero rows
+%                 Lmatrix( :, all(~Lmatrix,1) ) = [];                                   % Remove zero columns
+%                 [~,cellID] = find( EnKF.C{i}(obsID,:) );
+% 
+%                 y_pert = addNoise( stdDev.v(i),y{i}(obsID),numel(obsID),EnKF.q);
+% 
+%                 P = cov( x{i}(cellID,:)' );
+% 
+%                 innov = EnKF.C{i}(obsID,n).*( y_pert - EnKF.C{i}(obsID,cellID) * x{i}(cellID,:) );
+% 
+%                 Ki = P*EnKF.H{i}(obsID,cellID)' / (EnKF.H{i}(obsID,cellID)*P*EnKF.H{i}(obsID,cellID)' + Lmatrix);
+% 
+%                 x{i}(cellID,:) = x{i}(cellID,:) + Ki * innov;
+% 
+%             end                
+% =========================================================       
+
+
+% =========================================================     
+% Localization #2 (all cells within localization radius are updated)
+% phi = zeros(EnKF.N,EnKF.q);
+% seed = rng;
+%             for n = 1:EnKF.N
+%                 
+%                 Lfactor = heaviside( round(EnKF.Lradius.*ones(1,EnKF.numObs) - abs(Cx(EnKF.obsCells{i})' - Cx(n).*ones(1,EnKF.numObs)),5) );
+%                 [~,obsID] = find( Lfactor );
+%                 Lmatrix = Lfactor .* EnKF.R{i};   clear Lfactor;
+%                 Lmatrix( all(~Lmatrix,2), : ) = [];                                   % Remove zero rows
+%                 Lmatrix( :, all(~Lmatrix,1) ) = [];                                   % Remove zero columns
+%                 upper = Cx(n) + EnKF.Lradius;
+%                 lower = Cx(n) - EnKF.Lradius;
+%                 cellID = find(Cx >= lower & Cx <= upper);
+% rng(seed);
+%                 y_pert = addNoise( stdDev.v(i),y{i}(obsID),numel(obsID),EnKF.q);
+%                 P = cov( x{i}(cellID,:)' );
+% P = eye(numel(cellID));
+%                 innov = y_pert - EnKF.C{i}(obsID,cellID) * x{i}(cellID,:);
+%                 Ki = P*EnKF.H{i}(obsID,cellID)' / (EnKF.H{i}(obsID,cellID)*P*EnKF.H{i}(obsID,cellID)' + Lmatrix);
+%                 phi(cellID,:) = Ki * innov;
+% % phi(cellID,:) =  0.5 .* (phi(cellID,:) +  Ki * innov);
+%           
+% 
+%             end
+%             x{i} = x{i} + phi;   
+            
+% =========================================================  
+
+
+            filterData{i}(:,k) = mean( x{i},2 );                                 % calculates average of ensemble members for each state variable, then stores in a cell matrix for each time step k (represented as column vectors)
+        end
+
+    end
+     
+end
+
+
